@@ -85,18 +85,16 @@
 		 */
 		/* badge number remains same for 186 and 194 for them to share the same config */
 		modules {
-			cam_module0: module0 {
-				//badge: set by D3 overlay
-				/* D3 enable each template from the kernel cmdline */
-				status = "disabled";
+			cam_module0: module0 { /* CAM_MODULE_NODE */
+				badge = "adv_0_imx390rcm";
+				status = "okay";
 				position = "0";
 				orientation = "1";
 				drivernode0 {
 					pcl_id = "v4l2_sensor";
-					/* D3 enable each template from the kernel cmdline */
-					status = "disabled";
-					//devname: set by D3 overlay
-					//proc-device-tree : set by D3 overlay
+					status = "okay";
+					devname = "imx390 2-0048";
+					proc-device-tree = "/proc/device-tree/i2c@3180000/ub960@30/link@0/ub953@3c/imx390rcm@48";
 				};
 			};
 		};
@@ -115,9 +113,8 @@
 	/* use cam_i2cmux (i2c-mux-gpio) ?? */
 
 		/* Deserializer */
-		ub960_30: ub960@30 {
-			/* D3 enable each template from the kernel cmdline */
-			status = "disabled";
+		ub960_30: ub960@30 { /* DES_NODE */
+			status = "okay";
 			compatible = "d3,ub960";
 			reg = <0x30>;
 			iovdd-supply = <&vdd_1v8_ap>; // D3 setting
@@ -198,8 +195,7 @@
 	// port_idx corresponds to csi_port
 	ub953_0: ub953@3c { /* SER_NODE */
 		compatible = "d3,ub953";
-		/* D3 enable each template from the kernel cmdline */
-		status = "disabled";
+		status = "okay";
 		physical-addr = <0x18>;
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -210,37 +206,21 @@
 	};
 };
 
-// cam_module0 defined by tegra186-quill-camera-modules.dtsi
-//&cam_module0 {
-//	position = "0";
-//	/* D3 enable each template from the kernel cmdline */
-//	status = "disabled";
-//	orientation = "1";
-
-//	drivernode0 {
-//		pcl_id = "v4l2_sensor";
-//		/* D3 enable each template from the kernel cmdline */
-//		status = "disabled";
-//	};
-//};
-
 // vi_base defined by tegra186-quill-camera-modules.dtsi
 // vi_base: vi@15700000 (same address)
 &vi_base {
 	ports {
 		#address-cells = <1>;
 		#size-cells = <0>;
-		vi_port_0: port@0 {
-			/* D3 enable each template from the kernel cmdline */
-			status = "disabled";
+		vi_port_0: port@0 { /* VI_PORT_NODE */
+			status = "okay";
 			reg = <0>;
-			vi_in_0: endpoint {
-				/* D3 enable each template from the kernel cmdline */
-				status = "disabled";
+			vi_in_0: endpoint { /* VI_IN_NODE */
+				status = "okay";
 				port-index = <0>;
 				bus-width = <2>;
 				vc-id = <0>;
-				// remote-endpoint ?
+				remote-endpoint = <&csi_out_0>;
 			};
 		};
 	};
@@ -248,31 +228,28 @@
 
 // csi_base defined by tegra186-quill-camera-modules.dtsi
 &csi_base { /* nvcsi@150c0000 (same address) */
-	chan_0: channel@0 {
-		/* D3 enable each template from the kernel cmdline */
-		status = "disabled";
+	chan_0: channel@0 { /* CHAN_NODE */
+		status = "okay";
 		reg = <0>;
 		ports {
 			#address-cells = <1>;
 			#size-cells = <0>;
 			port@0 {
-				/* D3 enable each template from the kernel cmdline */
-				status = "disabled";
+				status = "okay";
 				reg = <0>;
-				csi_in_0: endpoint@0 {
-					/* D3 enable each template from the kernel cmdline */
-					status = "disabled";
+				csi_in_0: endpoint@0 { /* CSI_IN_NODE */
+					status = "okay";
 					port-index = <0>;
 					bus-width = <2>;
+					remote-endpoint = <&sen_out_imx390rcm_0>;
 				};
 			};
 			port@1 {
-				/* D3 enable each template from the kernel cmdline */
-				status = "disabled";
+				status = "okay";
 				reg = <1>;
-				csi_out_0: endpoint@1 {
-					/* D3 enable each template from the kernel cmdline */
-					status = "disabled";
+				csi_out_0: endpoint@1 { /* CSI_OUT_NODE */
+					status = "okay";
+					remote-endpoint = <&vi_in_0>;
 				};
 			};
 		};
@@ -280,10 +257,19 @@
 };
 
 &ub953_0 { /* SER_NODE */
-	imx390rcm_0: imx390rcm@48 {
+	imx390rcm_0: imx390rcm@48 { /* CAM_NODE */
 		status = "disabled";
 		compatible = "d3,imx390";
 		reg = <0x48>;
+
+		/* SER_NODE_OVERLAY */
+		gpio-rmten = <0x0>;
+		gpio-out-src = <0x3>;
+		gpio-out-en = <0xF>;
+		gpio-in-en = <0x0>;
+		hs-clk-div = <0x2>;
+		div-m-val = <0x1>;
+		div-n-val = <0x25>;
 
 		devnode = "video0";
 
@@ -398,11 +384,11 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			status = "disabled";
+			status = "okay";
 			port@0 {
 				reg = <0>;
-				sen_out_imx390rcm_0: endpoint {
-					status = "disabled";
+				sen_out_imx390rcm_0: endpoint { /* SEN_OUT_NODE */
+					status = "okay";
 					port-index = <0>;
 					bus-width = <2>;
 					remote-endpoint = <&csi_in_0>;
@@ -412,3 +398,5 @@
 		};
 	};
 };
+
+// #include "d3-overlays-cam.dtsi"
