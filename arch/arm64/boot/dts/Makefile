@@ -36,6 +36,7 @@ DTC_FLAGS += -i $(tegra-dtstree)/platform/tegra/common/kernel-dts
 DTCCPP_FLAGS := -I$(tegra-dtstree)/soc/tegra/kernel-include
 DTCCPP_FLAGS += -I$(tegra-dtstree)/platform/tegra/common/kernel-dts
 DTCCPP_FLAGS += -DLINUX_VERSION=409
+DTCCPP_FLAGS += -DD3_JETSON_BSP_BUILDID='"5709a6c7-2aab-4d48-82aa-144c7ab482fd"'
 
 ifeq ($(CONFIG_ARCH_TEGRA_210_SOC),y)
 DTC_FLAGS += -i $(tegra-dtstree)/soc/t210/kernel-dts
@@ -60,10 +61,12 @@ DTC_FLAGS += -i $(tegra-dtstree)/soc/t19x/kernel-include
 DTC_FLAGS += -i $(tegra-dtstree)/soc/t18x/kernel-include
 DTC_FLAGS += -i $(tegra-dtstree)/soc/t19x/kernel-dts
 DTC_FLAGS += -i $(tegra-dtstree)/platform/t19x/common/kernel-dts
+DTC_FLAGS += -i $(tegra-dtstree)/platform/t19x/galen/kernel-dts
 DTCCPP_FLAGS += -I$(tegra-dtstree)/soc/t19x/kernel-include
 DTCCPP_FLAGS += -I$(tegra-dtstree)/soc/t18x/kernel-include
 DTCCPP_FLAGS += -I$(tegra-dtstree)/soc/t19x/kernel-dts
 DTCCPP_FLAGS += -I$(tegra-dtstree)/platform/t19x/common/kernel-dts
+DTCCPP_FLAGS += -I$(tegra-dtstree)/platform/t19x/galen/kernel-dts
 endif
 
 ifeq ($(CONFIG_ARCH_TEGRA_23x_SOC),y)
@@ -93,6 +96,18 @@ DTC_FLAGS += $(addprefix -i $(tegra-dtstree)/,$(dts-include))
 DTCCPP_FLAGS += $(addprefix -I$(tegra-dtstree)/,$(dts-include))
 endif
 endif
+
+# Include D3 Makefiles for dtb Note that you can't use patsubst in
+# this case with wildcard because of expansion time rules...hence all
+# of this (using Nvidia's implementation as a template)
+d3_makefile=$(foreach d,$(wildcard $1*), $(call d3_makefile,$(d)/,$(2)) $(if $(findstring Makefile,$(d)),$(d)))
+d3_mfiles = $(call d3_makefile, $(tegra-dtstree)/../hardware/d3/, Makefile)
+include $(d3_mfiles)
+d3-dtb-y := $(addprefix $(tegra-rel-dtstree)/hardware/d3/,$(d3-dtb-y))
+dtb-y += $(d3-dtb-y)
+
+DTCCPP_FLAGS += -I$(tegra-dtstree)/../hardware/d3
+
 DTB_LIST += $(dtb-y)
 DTB_NEW_RULE_LIST := $(dtb-y)
 DTBO_LIST += $(dtbo-y)

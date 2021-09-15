@@ -811,6 +811,9 @@ KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
 endif
 
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
+
+KBUILD_CFLAGS += -DD3_JETSON_BSP_BUILDID='"5709a6c7-2aab-4d48-82aa-144c7ab482fd"'
+
 ifdef CONFIG_FRAME_POINTER
 KBUILD_CFLAGS	+= -fno-omit-frame-pointer -fno-optimize-sibling-calls
 else
