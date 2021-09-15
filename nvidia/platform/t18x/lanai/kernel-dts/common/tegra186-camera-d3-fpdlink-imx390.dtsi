@@ -1,0 +1,414 @@
+
+#include <dt-bindings/media/camera.h>
+
+/ {
+	host1x {
+		vi_base: vi@15700000  {
+			num-channels = <1>;
+		};
+
+		csi_base: nvcsi@150c0000 {
+			num-channels = <1>; // D3 num-channels = <6>; num-ports = <12>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+	};
+
+//	cam_i2cmux {
+//			i2c_0:i2c@0 {
+//				imx219_cam0: rbpcv2_imx219_a@10 {
+//					compatible = "nvidia,imx219";
+// ...
+//					ports {
+//						#address-cells = <1>;
+//						#size-cells = <0>;
+//						port@0 {
+//							reg = <0>;
+//							rbpcv2_imx219_out0: endpoint {
+//								port-index = <0>;
+//								bus-width = <2>;
+//								remote-endpoint = <&rbpcv2_imx219_csi_in0>;
+//							};
+//						};
+//					};
+//				};
+//			};
+//	};
+};
+
+/ {
+	tcp: tegra-camera-platform {
+		compatible = "nvidia, tegra-camera-platform";
+		/**
+		* Physical settings to calculate max ISO BW
+		*
+		* num_csi_lanes = <>;
+		* Total number of CSI lanes when all cameras are active
+		*
+		* max_lane_speed = <>;
+		* Max lane speed in Kbit/s
+		*
+		* min_bits_per_pixel = <>;
+		* Min bits per pixel
+		*
+		* vi_peak_byte_per_pixel = <>;
+		* Max byte per pixel for the VI ISO case
+		*
+		* vi_bw_margin_pct = <>;
+		* Vi bandwidth margin in percentage
+		*
+		* max_pixel_rate = <>;
+		* Max pixel rate in Kpixel/s for the ISP ISO case
+		*
+		* isp_peak_byte_per_pixel = <>;
+		* Max byte per pixel for the ISP ISO case
+		*
+		* isp_bw_margin_pct = <>;
+		* Isp bandwidth margin in percentage
+		*/
+		num_csi_lanes = <2>;
+		max_lane_speed = <1500000>;
+		min_bits_per_pixel = <12>;
+		vi_peak_byte_per_pixel = <2>;
+		vi_bw_margin_pct = <25>;
+		max_pixel_rate = <222750>;
+		isp_peak_byte_per_pixel = <5>;
+		isp_bw_margin_pct = <25>;
+
+		/**
+		 * The general guideline for naming badge_info contains 3 parts, and is as follows,
+		 * The first part is the camera_board_id for the module; if the module is in a FFD
+		 * platform, then use the platform name for this part.
+		 * The second part contains the position of the module, ex. "rear" or "front".
+		 * The third part contains the last 6 characters of a part number which is found
+		 * in the module's specsheet from the vendor.
+		 */
+		/* badge number remains same for 186 and 194 for them to share the same config */
+		modules {
+			cam_module0: module0 {
+				//badge: set by D3 overlay
+				/* D3 enable each template from the kernel cmdline */
+				status = "disabled";
+				position = "0";
+				orientation = "1";
+				drivernode0 {
+					pcl_id = "v4l2_sensor";
+					/* D3 enable each template from the kernel cmdline */
+					status = "disabled";
+					//devname: set by D3 overlay
+					//proc-device-tree : set by D3 overlay
+				};
+			};
+		};
+	};
+};
+
+
+/ {
+	// i2c0 => MCU
+	// i2c1 => IMU sensor
+	// i2c2 => mPCIe
+	// CAM_I2C ?
+	// From templated-deserializers/d3-des-ub960-template.dtsi
+	i2c@3180000 { /* CAM_I2C: see tegra186-soc/tegra186-soc-i2c.dtsi */
+
+	/* use cam_i2cmux (i2c-mux-gpio) ?? */
+
+		/* Deserializer */
+		ub960_30: ub960@30 {
+			/* D3 enable each template from the kernel cmdline */
+			status = "disabled";
+			compatible = "d3,ub960";
+			reg = <0x30>;
+			iovdd-supply = <&vdd_1v8_ap>; // D3 setting
+			avdd-supply = <&vdd_1v8_ap>;  // D3 setting
+			//pdb-gpios = <&gpio_i2c_8_74 5 GPIO_ACTIVE_LOW>; // FIXME D3 RESET_PIN
+			csi-lane-count = <2>; // D3 CSI_LANES
+			csi-tx-speed-mbps = <1600>; // D3 DES_CSI_SPEED
+			csi-continuous-clock = <1>;
+
+			/*
+			 * FPD-Link III Input Mode
+			 * Default value set by strap condition of MODE pin upon
+			 * asserting PDB = HIGH at start-up.
+			 * 00: CSI Mode (DS90UB953/935 compatible)
+			 * 01: RAW12 Mode/50 MHz (DS90UB913A/933 compatible)
+			 * 10: RAW12 Mode/75 MHz (DS90UB913A/933 compatible)
+			 * 11: RAW10 Mode/100 MHz (DS90UB913A/933 compatible)
+			 */
+			fpd3-mode = <0>; // D3 FPD3_MODE
+
+			/*
+			 * Back Channel Frequency Select. Default value set by strap condition
+			 * upon asserting PDB = HIGH.
+			 * 000: 2.5 Mbps (select for DS90UB933-Q1 or DS90UB913A-Q1 compatibility)
+			 * 001- 011: Reserved
+			 * 010: 10 Mbps (select for non-synchronous back channel compatibility)
+			 * 101: 25 Mbps
+			 * 110: 50 Mbps (default for DS90UB953-Q1 or DS90UB935-Q1 CSI Synchronous back channel compatibility)
+			 * 111: 100 Mbps
+			 * Note that changing this setting will result in some errors on the back
+			 * channel for a short period of time. If set over the control channel, the
+			 * Serializer should first be programmed to Auto-Ack operation to avoid
+			 * a control channel timeout due to lack of response from the
+			 * Deserializer.
+			 */
+			bc-freq = <6>; // D3 BC_FREQ
+
+			/* Internally generated FrameSync's high and low time, in microseconds.
+			 *
+			 * If these fields are omitted, they are configured for 15 ms high,
+			 * 35 ms low (20 Hz). Their value can be ignored if an internal
+			 * FrameSync is not being used
+			 */
+			frame-sync-high-time-us = <15000>;
+			frame-sync-low-time-us = <35000>;
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+			ub960_30_link0: link@0 {
+				reg = <0>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+			};
+			ub960_30_link1: link@1 {
+				reg = <1>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+			};
+			ub960_30_link2: link@2 {
+				reg = <2>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+			};
+			ub960_30_link3: link@3 {
+				reg = <3>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+			};
+		};
+	};
+};
+
+// DES_PATH = /proc/device-tree/i2c@3180000/ub960@30
+// SER_PATH = /proc/device-tree/i2c@3180000/ub960@30/link@0/ub953@3c
+// SEN_PATH = /proc/device-tree/i2c@3180000/ub960@30/link@0/ub953@3c/imx390rcm@48
+// From templated-serializers/d3-ser-ub953-template.dtsi
+&ub960_30_link0 {
+	// port_idx corresponds to csi_port
+	ub953_0: ub953@3c { /* SER_NODE */
+		compatible = "d3,ub953";
+		/* D3 enable each template from the kernel cmdline */
+		status = "disabled";
+		physical-addr = <0x18>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x3c>; // SER_ADDR
+		csi-lane-count = <4>;
+		csi-continuous-clock = <1>;
+		i2c-voltage-sel = <0x0>;
+	};
+};
+
+// cam_module0 defined by tegra186-quill-camera-modules.dtsi
+//&cam_module0 {
+//	position = "0";
+//	/* D3 enable each template from the kernel cmdline */
+//	status = "disabled";
+//	orientation = "1";
+
+//	drivernode0 {
+//		pcl_id = "v4l2_sensor";
+//		/* D3 enable each template from the kernel cmdline */
+//		status = "disabled";
+//	};
+//};
+
+// vi_base defined by tegra186-quill-camera-modules.dtsi
+// vi_base: vi@15700000 (same address)
+&vi_base {
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		vi_port_0: port@0 {
+			/* D3 enable each template from the kernel cmdline */
+			status = "disabled";
+			reg = <0>;
+			vi_in_0: endpoint {
+				/* D3 enable each template from the kernel cmdline */
+				status = "disabled";
+				port-index = <0>;
+				bus-width = <2>;
+				vc-id = <0>;
+				// remote-endpoint ?
+			};
+		};
+	};
+};
+
+// csi_base defined by tegra186-quill-camera-modules.dtsi
+&csi_base { /* nvcsi@150c0000 (same address) */
+	chan_0: channel@0 {
+		/* D3 enable each template from the kernel cmdline */
+		status = "disabled";
+		reg = <0>;
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			port@0 {
+				/* D3 enable each template from the kernel cmdline */
+				status = "disabled";
+				reg = <0>;
+				csi_in_0: endpoint@0 {
+					/* D3 enable each template from the kernel cmdline */
+					status = "disabled";
+					port-index = <0>;
+					bus-width = <2>;
+				};
+			};
+			port@1 {
+				/* D3 enable each template from the kernel cmdline */
+				status = "disabled";
+				reg = <1>;
+				csi_out_0: endpoint@1 {
+					/* D3 enable each template from the kernel cmdline */
+					status = "disabled";
+				};
+			};
+		};
+	};
+};
+
+&ub953_0 { /* SER_NODE */
+	imx390rcm_0: imx390rcm@48 {
+		status = "disabled";
+		compatible = "d3,imx390";
+		reg = <0x48>;
+
+		devnode = "video0";
+
+		mclk = "extperiph1";
+		physical_w = "5.37";
+		physical_h = "4.04";
+		sensor_model = "imx390";
+		use_decibel_gain = "true";
+		use_sensor_mode_id = "true";
+		physical-addr = <0x1a>;
+		deserializer = <&ub960_30>; /* DES_NODE */
+
+		//#include "templated-cameras/d3-cam-imx390-modes.dtsi"
+
+		/* SP1L */
+		mode0 {
+			mclk_khz = "25000";
+			num_lanes = "2";
+			tegra_sinterface = "serial_a";
+			discontinuous_clk = "no";
+			dpcm_enable = "false";
+			cil_settletime = "0";
+			csi_pixel_bit_depth = "12";
+			pixel_phase = "rggb";
+			active_w = "1936";
+			active_h = "1100";
+			readout_orientation = "0";
+			inherent_gain = "1";
+			serdes_pix_clk_hz = "535000000";
+			pix_clk_hz = "148500000";
+			embedded_metadata_height = "1";
+			min_hdr_ratio = "1.737";
+			max_hdr_ratio = "1.737";
+			vc_id = "0";
+			mode_type = "bayer";
+			line_length = "4400";
+			min_gain_val = "0";
+			max_gain_val = "30";
+			min_framerate = "30";
+			max_framerate = "30";
+			min_exp_time = "30";
+			max_exp_time = "33333";
+			dynamic_pixel_bit_depth = "12";
+			num_control_point = "0";
+		};
+
+		/* SP1H */
+		mode1 {
+			mclk_khz = "25000";
+			num_lanes = "2";
+			tegra_sinterface = "serial_a";
+			discontinuous_clk = "no";
+			dpcm_enable = "false";
+			cil_settletime = "0";
+			csi_pixel_bit_depth = "12";
+			pixel_phase = "rggb";
+			active_w = "1936";
+			active_h = "1100";
+			readout_orientation = "0";
+			inherent_gain = "1";
+			serdes_pix_clk_hz = "535000000";
+			pix_clk_hz = "148500000";
+			embedded_metadata_height = "1";
+			min_hdr_ratio = "1.737";
+			max_hdr_ratio = "1.737";
+			vc_id = "0";
+			mode_type = "bayer";
+			line_length = "4400";
+			min_gain_val = "0";
+			max_gain_val = "30";
+			min_framerate = "30";
+			max_framerate = "30";
+			min_exp_time = "30";
+			max_exp_time = "33333";
+			dynamic_pixel_bit_depth = "12";
+			num_control_point = "0";
+		};
+
+		/* SP2h */
+		mode2 {
+			mclk_khz = "25000";
+			num_lanes = "2";
+			tegra_sinterface = "serial_a";
+			discontinuous_clk = "no";
+			dpcm_enable = "false";
+			cil_settletime = "0";
+			csi_pixel_bit_depth = "12";
+			pixel_phase = "rggb";
+			active_w = "1936";
+			active_h = "1100";
+			readout_orientation = "0";
+			inherent_gain = "1";
+			serdes_pix_clk_hz = "535000000";
+			pix_clk_hz = "148500000";
+			embedded_metadata_height = "1";
+			min_hdr_ratio = "1.737";
+			max_hdr_ratio = "1.737";
+			vc_id = "0";
+			mode_type = "bayer";
+			line_length = "4400";
+			min_gain_val = "0";
+			max_gain_val = "30";
+			min_framerate = "30";
+			max_framerate = "30";
+			min_exp_time = "30";
+			max_exp_time = "33333";
+			dynamic_pixel_bit_depth = "12";
+			num_control_point = "0";
+		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			status = "disabled";
+			port@0 {
+				reg = <0>;
+				sen_out_imx390rcm_0: endpoint {
+					status = "disabled";
+					port-index = <0>;
+					bus-width = <2>;
+					remote-endpoint = <&csi_in_0>;
+					vc-id = <0>; /* PORT_VCID */
+				};
+			};
+		};
+	};
+};

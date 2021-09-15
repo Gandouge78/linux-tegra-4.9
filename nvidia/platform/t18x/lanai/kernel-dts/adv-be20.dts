@@ -17,6 +17,8 @@
 #include "common/tegra186-p3509-0000-a00-fixed-regulator.dtsi"
 #include "common/tegra186-p3636-0001-a00-prod.dtsi"
 
+#include "common/tegra186-camera-d3-fpdlink-imx390.dtsi"
+
 /* plugin manager */
 #include "common/tegra186-super-module-e2614-p3509-0000-a00.dtsi"
 
