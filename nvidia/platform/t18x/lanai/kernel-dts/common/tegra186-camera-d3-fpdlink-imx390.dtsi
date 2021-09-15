@@ -258,7 +258,7 @@
 
 &ub953_0 { /* SER_NODE */
 	imx390rcm_0: imx390rcm@48 { /* CAM_NODE */
-		status = "disabled";
+		status = "okay";
 		compatible = "d3,imx390";
 		reg = <0x48>;
 
