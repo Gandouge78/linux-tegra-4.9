@@ -203,6 +203,22 @@
 		csi-lane-count = <4>;
 		csi-continuous-clock = <1>;
 		i2c-voltage-sel = <0x0>;
+
+		/* SER_NODE_OVERLAY */
+		// FS: hs-clk-div: Div by 2
+		// FS: div-m-val:               : UB953_REG_CLKOUT_CTRL0 (0x06) = 0x21
+		// FS: div-n-val: default value : UB953_REG_CLKOUT_CTRL1 (0x07) = 0x28
+		// FS: gpio-rmten: 0x4
+		// FS: gpio-out-src: 0xb        : UB953_REG_LOCAL_GPIO_DATA (0x0d) = 0x4b
+		// FS: gpio_out_en:
+		// FS: gpio-in-en:              : UB953_REG_GPIO_INPUT_CTRL (0x0e) = 0xf0
+		gpio-rmten = <0x4>;
+		gpio-out-src = <0xb>;
+		gpio-out-en = <0xF>;
+		gpio-in-en = <0x0>;
+		hs-clk-div = <0x1>;
+		div-m-val = <0x1>;
+		div-n-val = <0x28>;
 	};
 };
 
@@ -261,15 +277,6 @@
 		status = "okay";
 		compatible = "d3,imx390";
 		reg = <0x48>;
-
-		/* SER_NODE_OVERLAY */
-		gpio-rmten = <0x0>;
-		gpio-out-src = <0x3>;
-		gpio-out-en = <0xF>;
-		gpio-in-en = <0x0>;
-		hs-clk-div = <0x2>;
-		div-m-val = <0x1>;
-		div-n-val = <0x25>;
 
 		devnode = "video0";
 
