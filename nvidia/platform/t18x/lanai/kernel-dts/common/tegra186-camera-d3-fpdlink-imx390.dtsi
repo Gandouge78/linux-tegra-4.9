@@ -121,7 +121,7 @@
 			avdd-supply = <&vdd_1v8_ap>;  // D3 setting
 			//pdb-gpios = <&gpio_i2c_8_74 5 GPIO_ACTIVE_LOW>; // FIXME D3 RESET_PIN
 			csi-lane-count = <2>; // D3 CSI_LANES
-			csi-tx-speed-mbps = <1600>; // D3 DES_CSI_SPEED
+			csi-tx-speed-mbps = <800>; // D3 DES_CSI_SPEED
 			csi-continuous-clock = <1>;
 
 			/*
@@ -133,7 +133,7 @@
 			 * 10: RAW12 Mode/75 MHz (DS90UB913A/933 compatible)
 			 * 11: RAW10 Mode/100 MHz (DS90UB913A/933 compatible)
 			 */
-			fpd3-mode = <0>; // D3 FPD3_MODE
+			fpd3-mode = <2>; // D3 FPD3_MODE
 
 			/*
 			 * Back Channel Frequency Select. Default value set by strap condition
@@ -150,7 +150,7 @@
 			 * a control channel timeout due to lack of response from the
 			 * Deserializer.
 			 */
-			bc-freq = <6>; // D3 BC_FREQ
+			bc-freq = <2>; // D3 BC_FREQ
 
 			/* Internally generated FrameSync's high and low time, in microseconds.
 			 *
@@ -202,7 +202,7 @@
 		reg = <0x3c>; // SER_ADDR
 		csi-lane-count = <4>;
 		csi-continuous-clock = <1>;
-		i2c-voltage-sel = <0x0>;
+		i2c-voltage-sel = <0x1>; // FS settings
 
 		/* SER_NODE_OVERLAY */
 		// FS: hs-clk-div: Div by 2
@@ -286,7 +286,7 @@
 		sensor_model = "imx390";
 		use_decibel_gain = "true";
 		use_sensor_mode_id = "true";
-		physical-addr = <0x1a>;
+		physical-addr = <0x21>; /* 0x1a (D3) -> 0x21 (FS) */
 		deserializer = <&ub960_30>; /* DES_NODE */
 
 		//#include "templated-cameras/d3-cam-imx390-modes.dtsi"
