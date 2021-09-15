@@ -3,7 +3,7 @@
  *
  * imx390 v4l2 driver for Nvidia Jetson
  *
- * Copyright (c) 2018-2019, D3 Engineering.  All rights reserved.
+ * Copyright (c) 2018-2021, D3 Engineering.  All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -19,6 +19,7 @@
  */
 #include <linux/module.h>
 #include <linux/of_device.h>
+#include <linux/gpio/consumer.h>
 
 #include <media/camera_common.h>
 
@@ -26,14 +27,6 @@
 #include <d3/ub960.h>
 
 #include "imx390-modes.h"
-
-
-/**
- * If @p expr evalutes to non-zero assign it to @p err and return @p err
- */
-#define TRY(err, expr) if(((err) = (expr))) { return (err); }
-
-
 
 
 /**
@@ -53,6 +46,10 @@ enum {
 	IMX390_REG_REAR_EMBDATA_LINE = 0x2E18,
 };
 
+/**
+ * If @p expr evalutes to non-zero assign it to @p err and return @p err
+ */
+#define TRY(err, expr) if(((err) = (expr))) { return (err); }
 
 /**
  * The 390 has 16 bit addresses and 8 bit values.
@@ -74,6 +71,8 @@ struct imx390 {
 	struct i2c_client *client;
 	struct device *dev;
 	struct regmap *map;
+
+	struct gpio_desc *reset_pin;
 
 	struct camera_common_data *s_data;
 	struct camera_common_pdata *pdata;
@@ -187,6 +186,36 @@ static struct v4l2_ctrl_config ctrl_config_list[] = {
 #define NUM_STD_CONTROLS	(2)
 #define NUM_CONTROLS		(NUM_CUSTOM_CONTROLS + NUM_STD_CONTROLS)
 
+/**
+ * Handles the reset logic via the GPIO pin on the UB953. The IMX390 is
+ * connected to a single reset pin. The reset pin does not have to be provided
+ * in which case the reset logic will not do anything.
+ *
+ * @param self The imager to reset
+ */
+static void imx390_reset(struct imx390 *self)
+{
+	if (!self->reset_pin) {
+		dev_warn(self->dev, "no reset GPIO defined, not resetting");
+		return;
+	}
+
+	dev_warn(self->dev, "Resetting imager");
+	// Pull reset low
+	if(self->reset_pin)
+		gpiod_set_value_cansleep(self->reset_pin, 0);
+
+	// Allow resetting to take place
+	usleep_range(4 * 1000, 5 * 1000);
+
+	// Pull reset high
+	if(self->reset_pin)
+		gpiod_set_value_cansleep(self->reset_pin, 1);
+
+	// Allow device to re-engage
+	usleep_range(4 * 1000, 5 * 1000);
+	dev_warn(self->dev, "Resetting complete");
+}
 
 /**
  * Reads a single register from the sensor and prints it.
@@ -206,7 +235,7 @@ static int imx390_reg_read(struct imx390 *self, u16 addr, u8 *out)
 		return err;
 	}
 	*out = val;
-	dev_dbg(self->dev, "read: %#.4x=%#.2x", addr, *out);
+	dev_warn(self->dev, "read: %#.4x=%#.2x", addr, *out);
 	return 0;
 }
 
@@ -227,6 +256,7 @@ static int imx390_read_reg(struct camera_common_data *s_data, u16 addr, u8 *val)
 	int err = 0;
 	struct imx390 *self = s_data->priv;
 
+	dev_warn(self->dev, "write: %#.4x=%#.2x", (u32)addr, (u32)*val);
 	TRY(err, imx390_reg_read(self, addr, val));
 	return 0;
 }
@@ -260,12 +290,24 @@ static int imx390_mode_set(struct imx390 *self, enum imx390_mode mode)
 	int err = 0;
 	struct imx390_modes_map *pmode = NULL;
 
-	if ((mode < 0)
-	    || (mode > IMX390_MODE_ENDMARKER)) {
+	if ((mode < 0) || (mode > IMX390_MODE_ENDMARKER)) {
 		dev_err(self->dev, "invalid mode %d (0-4)", mode);
 		return -EINVAL;
 	}
-	pmode = &imx390_modes_map[mode];
+//	if (self->s_data->numlanes == 2) {
+//#ifdef CONFIG_D3_IMX390_HDR_ENABLE
+//		if (mode == IMX390_MODE_HDR) {
+//			dev_err(self->dev, "2 lane HDR NOT IMPLEMENTED!");
+//			return -EINVAL;
+//		}
+//#endif	/* CONFIG_D3_IMX390_HDR_ENABLE */
+//		pmode = &imx390_2lane_modes_map[mode];
+//	}
+	else {
+		pmode = &imx390_modes_map[mode];
+
+	}
+	imx390_reset(self);
 	dev_info(self->dev, "setting mode: %s\n", pmode->desc);
 	TRY(err, regmap_multi_reg_write(self->map, pmode->vals, *pmode->n_vals));
 	return 0;
@@ -305,17 +347,14 @@ static int imx390_s_stream(struct v4l2_subdev *sd, int enable)
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	struct camera_common_data *s_data = to_camera_common_data(&client->dev);
 	struct imx390 *self = (struct imx390 *)s_data->priv;
-	int mode_ix = self->s_data->sensor_mode_id;
 
-	dev_dbg(self->dev, "%s", enable ? "START" : "STOP");
+	dev_warn(self->dev, "enter %s", enable ? "START" : "STOP");
 
 	if (self->deserializer) {
 		ub960_s_stream(self->deserializer, self->client, enable);
 	}
 
 	if (enable) {
-		TRY(err, imx390_mode_set(self, mode_ix));
-
 		if (self->hflip)
 			imx390_set_hflip_raw(self, self->hflip);
 		if (self->vflip)
@@ -323,6 +362,7 @@ static int imx390_s_stream(struct v4l2_subdev *sd, int enable)
 	}
 
 	TRY(err, regmap_write(self->map, IMX390_REG_STANDBY, enable ? 0:1));
+	dev_warn(self->dev, "exit %s", enable ? "START" : "STOP");
 	return 0;
 }
 
@@ -351,7 +391,7 @@ static int imx390_g_input_status(struct v4l2_subdev *sd, u32 *status)
 static int imx390_remove(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
-	dev_dbg(dev, "removed");
+	dev_warn(dev, "removed");
 	return 0;
 }
 
@@ -377,11 +417,8 @@ static struct v4l2_subdev_core_ops imx390_subdev_core_ops = {
 
 static int imx390_power_on(struct camera_common_data *s_data)
 {
-	/* int err = 0; */
 	struct imx390 *priv = (struct imx390 *)s_data->priv;
 	struct camera_common_power_rail *pw = &priv->power;
-
-	dev_dbg(priv->dev, "%s: power on\n", __func__);
 	pw->state = SWITCH_ON;
 	return 0;
 }
@@ -389,11 +426,8 @@ static int imx390_power_on(struct camera_common_data *s_data)
 
 static int imx390_power_off(struct camera_common_data *s_data)
 {
-	/* int err = 0; */
 	struct imx390 *priv = (struct imx390 *)s_data->priv;
 	struct camera_common_power_rail *pw = &priv->power;
-
-	dev_dbg(priv->dev, "%s: power off\n", __func__);
 	pw->state = SWITCH_OFF;
 	return 0;
 }
@@ -409,8 +443,8 @@ static int imx390_power_off(struct camera_common_data *s_data)
  * @return 0 on success
  */
 static int imx390_set_fmt(struct v4l2_subdev *sd,
-                          struct v4l2_subdev_pad_config *cfg,
-                          struct v4l2_subdev_format *format)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *format)
 {
 	/* struct camera_common_data *s_data = to_camera_common_data(sd->dev); */
 	int err = 0;
@@ -435,18 +469,18 @@ static int imx390_set_fmt(struct v4l2_subdev *sd,
  * @return
  */
 static int imx390_get_fmt(struct v4l2_subdev *sd,
-                          struct v4l2_subdev_pad_config *cfg,
-                          struct v4l2_subdev_format *format)
+			  struct v4l2_subdev_pad_config *cfg,
+			  struct v4l2_subdev_format *format)
 {
 	return camera_common_g_fmt(sd, &format->format);
 }
 
 
 static struct v4l2_subdev_pad_ops imx390_subdev_pad_ops = {
-	.set_fmt	     = imx390_set_fmt,
-	.get_fmt	     = imx390_get_fmt,
-	.enum_mbus_code	     = camera_common_enum_mbus_code,
-	.enum_frame_size     = camera_common_enum_framesizes,
+	.set_fmt		 = imx390_set_fmt,
+	.get_fmt		 = imx390_get_fmt,
+	.enum_mbus_code		 = camera_common_enum_mbus_code,
+	.enum_frame_size	 = camera_common_enum_framesizes,
 	.enum_frame_interval = camera_common_enum_frameintervals,
 };
 
@@ -487,7 +521,7 @@ static int imx390_ctrls_init(struct imx390 *self)
 	int custom_index;
 	int ctrl_index;
 
-	dev_dbg(self->dev, "%s++", __func__);
+	dev_warn(self->dev, "%s++", __func__);
 
 	v4l2_ctrl_handler_init(&self->ctrl_handler, NUM_CONTROLS);
 
@@ -523,7 +557,7 @@ static int imx390_ctrls_init(struct imx390 *self)
 		}
 
 		if (ctrl_config_list[custom_index].type == V4L2_CTRL_TYPE_STRING &&
-		    ctrl_config_list[custom_index].flags & V4L2_CTRL_FLAG_READ_ONLY)
+			ctrl_config_list[custom_index].flags & V4L2_CTRL_FLAG_READ_ONLY)
 		{
 			/* @todo should use imx390_kzalloc */
 			ctrl->p_new.p_char = devm_kzalloc(
@@ -571,8 +605,8 @@ error:
  */
 static int imx390_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 {
-	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	dev_dbg(&client->dev, "open");
+	/* struct i2c_client *client = v4l2_get_subdevdata(sd); */
+	/* dev_warn(&client->dev, "open"); */
 	return 0;
 }
 
@@ -615,7 +649,7 @@ static int imx390_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
  */
 static int imx390_group_hold_enable(struct imx390 *self, s32 val)
 {
-	/* dev_dbg(self->dev, "group hold: %d", val); */
+	/* dev_warn(self->dev, "group hold: %d", val); */
 	return regmap_write(self->map, IMX390_REG_REG_HOLD, val ? 1:0);
 }
 
@@ -641,24 +675,21 @@ static int imx390_gain_raw_set(struct imx390 *self, u16 gain)
 	/* This register holds an 11 bit value */
 	u16 masked = gain & 0x7ff;
 
-
-	/* This should never be called in HDR mode but we'll put check
-	 * in to be safe. */
-	if (imx390_is_hdr(self)) {
-		return 0;
-	}
-
-	dev_dbg(self->dev, "set gain: val=%#.2x", masked);
+	dev_warn(self->dev, "set gain: val=%#.2x", masked);
 
 	TRY(err, imx390_group_hold_enable(self, 1));
 
 	/* Set the analog gain registers. These are in .3 db steps. */
+	/*JE: if HDR mode, set SP1_H gain only - Auto Exposure Mode 1 for HDR */
 	TRY(err, regmap_write(self->map, IMX390_REG_AGAIN_SP1H, masked & 0xff));
 	TRY(err, regmap_write(self->map, IMX390_REG_AGAIN_SP1H +1,
 			      (masked >> 8) & 0xff));
-	TRY(err, regmap_write(self->map, IMX390_REG_AGAIN_SP1L, masked & 0xff));
-	TRY(err, regmap_write(self->map, IMX390_REG_AGAIN_SP1L + 1,
+
+	if (!imx390_is_hdr(self)) {	
+		TRY(err, regmap_write(self->map, IMX390_REG_AGAIN_SP1L, masked & 0xff));
+		TRY(err, regmap_write(self->map, IMX390_REG_AGAIN_SP1L + 1,
 			      (masked >> 8) & 0xff));
+	}
 	TRY(err, imx390_group_hold_enable(self, 0));
 	return 0;
 }
@@ -682,18 +713,9 @@ static int imx390_gain_set(struct imx390 *self, s64 val)
 	/* imx390 gain is 0 to 30 in .3db steps. */
 	u16 gain = 0;
 
-
-	/* Gain is fixed for HDR mode. Sony recommends fixing exposure
-	 * to 11ms, and having two gains: one for low light conditions
-	 * and one for brighter conditions. We could add another HDR
-	 * mode to accommodate that. */
-	if (imx390_is_hdr(self)) {
-		return 0;
-	}
-
 	gain = val * 10 / 3 / FIXED_POINT_SCALING_FACTOR;
 
-	dev_dbg(self->dev, "gain: val=%#llx reg=%#x", val, gain);
+	dev_warn(self->dev, "gain: val=%#llx reg=%#x", val, gain);
 
 	if (gain > 100) {
 		dev_warn(self->dev, "invalid gain: reg=%#x", gain);
@@ -735,13 +757,7 @@ static int imx390_exposure_raw_set(struct imx390 *self, u32 exp)
 	struct reg_sequence writes[6] = {0};
 	int err = 0;
 
-	/* This should never be called in HDR mode but we'll put check
-	 * in to be safe. */
-	if (imx390_is_hdr(self)) {
-		return 0;
-	}
-
-	dev_dbg(self->dev, "set exposure: reg=%#x", exp);
+	dev_warn(self->dev, "set exposure: reg=%#x", exp);
 	TRY(err, imx390_group_hold_enable(self, 1));
 
 	/* 20 bit value */
@@ -790,10 +806,6 @@ static int imx390_exposure_set(struct imx390 *self, s64 val)
 	const struct sensor_mode_properties *mode =
 		&s_data->sensor_props.sensor_modes[s_data->mode];
 
-	/* Exposure is fixed at 11ms for HDR. */
-	if (imx390_is_hdr(self))
-		return 0;
-
 	/* This is figuring out how many lines are output for the
 	 * desired exposure time. */
 	/* pixel clock * TIME / line_length */
@@ -818,7 +830,7 @@ static int imx390_exposure_set(struct imx390 *self, s64 val)
 		reg = 0x100000 -1;
 	}
 
-	dev_dbg(self->dev,
+	dev_warn(self->dev,
 		"pixel clock=%lld"
 		", line-length=%d"
 		", frame-length=%d"
@@ -859,6 +871,9 @@ static int imx390_s_ctrl(struct v4l2_ctrl *ctrl)
 		 * that is the xclr pin. While this isn't impossible
 		 * in a serdes configration it isn't easy right now. */
 		self->s_data->sensor_mode_id = *ctrl->p_new.p_s64;
+		dev_warn(self->dev, "mode set start");
+		TRY(err, imx390_mode_set(self, *ctrl->p_new.p_s64));
+		dev_warn(self->dev, "mode set stop");
 		return 0;
 	case V4L2_CID_HFLIP:
 		TRY(err, imx390_set_hflip(self, ctrl->val));
@@ -920,8 +935,8 @@ static int imx390_kzalloc(struct device *dev, size_t len, void *out)
  * @return 0 on success
  */
 static int imx390_regmap_init(struct i2c_client *client,
-                              struct regmap_config *cfg,
-                              struct regmap **out_map)
+			      struct regmap_config *cfg,
+			      struct regmap **out_map)
 {
 	if (!(*out_map = devm_regmap_init_i2c(client, cfg))) {
 		dev_err(&client->dev, "regmap_init failed");
@@ -943,6 +958,7 @@ static int imx390_revision_report(struct imx390 *self)
 	u8 rev1 = 0xff;
 	u8 rev2 = 0xff;
 	u8 rev3 = 0xff;
+	u8 mpMode = 0xff;
 	int tries;
 
 	for (tries = 50; --tries >= 0; ) {
@@ -961,12 +977,20 @@ static int imx390_revision_report(struct imx390 *self)
 			usleep_range(10 * 1000, 10 * 1000);
 			continue;
 		}
+		err = imx390_reg_read(self, 0x3069, &mpMode);
+		if (err) {
+			usleep_range(10 * 1000, 10 * 1000);
+			continue;
+		}
 
 		dev_info(self->dev,
 			 "revision %#.2x = %#.2x, %#.2x = %#.2x %#.2x = %#.2x",
 			 IMX390_REG_REV1, rev1,
 			 IMX390_REG_REV2, rev2,
 			 IMX390_REG_REV3, rev3);
+		dev_info(self->dev,
+			 "MP mode %#.2x = %#.2x",
+			 0x3069, mpMode);
 		return 0;
 	}
 
@@ -983,7 +1007,7 @@ static int imx390_deserializer_parse(struct imx390 *self,
 
 	deserializer_node = of_parse_phandle(node, "deserializer", 0);
 	if (!deserializer_node) {
-		dev_dbg(self->dev, "could not find deserializer node");
+		dev_warn(self->dev, "optional deserializer node is not present");
 		return -ENOENT;
 	}
 
@@ -992,7 +1016,7 @@ static int imx390_deserializer_parse(struct imx390 *self,
 	deserializer_node = NULL;
 
 	if (!deserializer_client) {
-		dev_dbg(self->dev, "missing deserializer client");
+		dev_warn(self->dev, "optional deserializer client is not present");
 		return -ENOENT;
 	}
 
@@ -1031,15 +1055,14 @@ static struct camera_common_pdata *imx390_parse_dt(
 					sizeof(*board_priv_pdata), GFP_KERNEL);
 
 	err = of_property_read_string(node, "mclk",
-				      &board_priv_pdata->mclk_name);
+					  &board_priv_pdata->mclk_name);
 	if (err)
 		dev_warn(self->dev, "mclk not in DT");
 
-	if (imx390_deserializer_parse(self, &self->deserializer) == 0) {
-		dev_dbg(self->dev, "deserializer present");
-	}
-	else {
-		self->deserializer = NULL;
+	self->deserializer = NULL;
+	imx390_deserializer_parse(self, &self->deserializer);
+	if (self->deserializer) {
+		dev_warn(self->dev, "deserializer present");
 	}
 
 	return board_priv_pdata;
@@ -1087,14 +1110,14 @@ static int imx390_media_init(struct imx390 *self)
  * @return 0 on success
  */
 static int imx390_probe(struct i2c_client *client,
-                        const struct i2c_device_id *id)
+			const struct i2c_device_id *id)
 {
 	int err = 0;
 	struct camera_common_data *common_data;
 	struct device_node *node = client->dev.of_node;
 	struct imx390 *self = NULL;
 
-	dev_dbg(&client->dev, "probe");
+	dev_warn(&client->dev, "probe");
 
 	if (!IS_ENABLED(CONFIG_OF) || !node) {
 		return -EINVAL;
@@ -1139,7 +1162,7 @@ static int imx390_probe(struct i2c_client *client,
 	/* common_data->mode_prop_idx; */
 
 	common_data->numfmts = imx390_modes_formats_len;
-	dev_dbg(self->dev, "num fmts %d", common_data->numfmts);
+	dev_warn(self->dev, "num fmts %d", common_data->numfmts);
 	common_data->def_mode = IMX390_MODE_DEFAULT;
 	common_data->def_width =
 		common_data->frmfmt[IMX390_MODE_DEFAULT].size.width;
@@ -1160,6 +1183,13 @@ static int imx390_probe(struct i2c_client *client,
 	if (!self->pdata)
 		return -EFAULT;
 
+	// Reset in GPIO pins
+	self->reset_pin = gpiod_get_optional(self->dev, "reset", GPIOD_OUT_HIGH);
+	if(!self->reset_pin)
+		dev_warn(self->dev, "No reset pin found, not required");
+
+	imx390_reset(self);
+
 	TRY(err, imx390_regmap_init(self->client,
 				    &imx390_regmap_cfg,
 				    &self->map));
@@ -1178,7 +1208,7 @@ static int imx390_probe(struct i2c_client *client,
 	TRY(err, v4l2_async_register_subdev(self->subdev));
 
 	TRY(err, regmap_write(self->map, IMX390_REG_STANDBY, 1));
-	dev_dbg(self->dev, "probe success");
+	dev_warn(self->dev, "probe success");
 	return 0;
 }
 

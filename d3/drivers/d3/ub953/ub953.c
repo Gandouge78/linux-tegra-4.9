@@ -54,12 +54,20 @@
 enum {
 	UB953_REG_RESET_CTL       = 0x01,
 	UB953_GENERAL_CFG         = 0x02,
+	UB953_REG_MODE_SEL        = 0x03,
+	UB953_REGBC_MODE_SELECT   = 0x04,
+	UB953_REG_PLLCLK_CTRL     = 0x05,
 	UB953_REG_CLKOUT_CTRL0    = 0x06,
 	UB953_REG_CLKOUT_CTRL1    = 0x07,
+	UB953_REG_I2C_CONTROL2    = 0x0a,
 	UB953_REG_LOCAL_GPIO_DATA = 0x0d,
 	UB953_REG_GPIO_INPUT_CTRL = 0x0e,
+	UB953_REG_DVP_CFG         = 0x10,
 	UB953_REG_BCC_CONFIG      = 0x32,
+	UB953_REG_DES_ID          = 0x37,
 	UB953_REG_REV_MASK_ID     = 0x50,
+	UB953_REG_GENERAL_STATUS  = 0x52,
+	UB953_REG_SENSOR_STATUS   = 0x57,
 	UB953_REG_IND_ACC_CTL     = 0xB0,
 	UB953_REG_IND_ACC_ADDR    = 0xB1,
 	UB953_REG_IND_ACC_DATA    = 0xB2,
@@ -163,7 +171,7 @@ struct ub953
 /* 		return err; */
 /* 	} */
 /* 	*out = val; */
-/* 	dev_dbg(self->dev, "read: %#.2x=%#.2x", addr, *out); */
+/* 	dev_warn(self->dev, "read: %#.2x=%#.2x", addr, *out); */
 /* 	return 0; */
 /* } */
 
@@ -171,7 +179,7 @@ struct ub953
 /* static int ub953_reg_write(struct ub953 *self, u8 addr, u8 val) */
 /* { */
 /* 	int err = 0; */
-/* 	dev_dbg(self->dev, "write: %#.2x=%#.2x", addr, val); */
+/* 	dev_warn(self->dev, "write: %#.2x=%#.2x", addr, val); */
 /* 	if((err = regmap_write(self->map, addr, val))) */
 /* 	{ */
 /* 		dev_err(self->dev, "write error: %d", err); */
@@ -247,7 +255,7 @@ static int ub953_devinfo_load(struct ub953 *self,
 	strncpy(out->type, type, sizeof(out->type));
 
 	out->of_node = node;
-	dev_dbg(self->dev, "reg=%#.2x, physical-addr=%#.2x, type=(%s)",
+	dev_warn(self->dev, "reg=%#.2x, physical-addr=%#.2x, type=(%s)",
 		out->addr, out->physical_addr, out->type);
 	return 0;
 }
@@ -323,7 +331,7 @@ static int ub953_sensor_create(struct ub953 *self,
 
 static void ub953_cfg_dump(struct ub953 *self, const struct ub953_cfg *cfg)
 {
-	dev_dbg(self->dev,
+	dev_warn(self->dev,
 		"div-m-val=%d"
 		" hs-clk-div=%d"
 		" div-n-val=%d"
@@ -355,15 +363,18 @@ static int ub953_wait_for_data(struct ub953 *self)
 	unsigned int val = 0;
 	unsigned int tries = 40;  /* 2 seconds */
 
+	dev_warn(self->dev, "ub953_wait_for_data().\n");
+
 	do {
 		err = regmap_read(self->map, 0x61, &val);
-		dev_dbg(self->dev, "Waiting for data... (VC=%x, Data ID=%x)\n", ((val >> 6) & 0x3), (val & 0x3F));
+		dev_warn(self->dev, "Waiting for data... (VC=%x, Data ID=%x)\n", ((val >> 6) & 0x3), (val & 0x3F));
 		if (val == 0) {
 			usleep_range(50*1000,50*1000);
 		}
 		/* check for timeout */
 		if (--tries == 0) {
-			dev_dbg(self->dev, "Timeout waiting for CSI data.");
+			dev_warn(self->dev, "Timeout waiting for CSI data.");
+			dev_warn(self->dev, "Timeout waiting for CSI data.\n");
 			break;
 		}
 	} while ((err == 0 || err == -ETIMEDOUT) && val == 0);
@@ -383,12 +394,16 @@ static int ub953_reset(struct ub953 *self, const struct ub953_cfg *cfg)
 
 	char fpd3_tx_id[6];
 
+	dev_warn(self->dev, "wait_for_self_configure().\n");
 	if (cfg->wait_for_self_configure)
 		TRY(err, ub953_wait_for_data(self));
+	dev_warn(self->dev, "wait_for_self_configure(). OK\n");
 
 	/* No reset gpio, try digital reset */
 	TRY(err, regmap_write(self->map, UB953_REG_RESET_CTL, 0x01));
 	usleep_range(4 * 1000, 5 * 1000);
+
+	dev_warn(self->dev, "regmap_write(): try digital reset. OK\n");
 
 	is_known = false;
 	for (tries = 50; --tries > 0; ) {
@@ -402,7 +417,10 @@ static int ub953_reset(struct ub953 *self, const struct ub953_cfg *cfg)
 	}
 
 	if (err < 0)
+	{
+		dev_warn(self->dev, "Unable to reset the device!.\n");
 		return err;
+	}
 
 	for(i=0; i<ARRAY_SIZE(VALID_IDS); ++i) {
 		if (memcmp(fpd3_tx_id, VALID_IDS[i], sizeof(fpd3_tx_id)) == 0) {
@@ -438,7 +456,11 @@ static int ub953_init(struct ub953 *self, const struct ub953_cfg *cfg)
 	int err;
 	enum ub953_csi_lane_count lane_cnt;
 
+	dev_warn(self->dev, "ub953_init().\n");
+
 	TRY(err, ub953_reset(self, cfg));
+
+	dev_warn(self->dev, "ub953_reset() ok.\n");
 
 	ub953_cfg_dump(self, cfg);
 
@@ -457,6 +479,15 @@ static int ub953_init(struct ub953 *self, const struct ub953_cfg *cfg)
 			return -EINVAL;
 	}
 
+	/* 0x52 - 2 lanes: 0b 0101 0010 : continuous_clock | !lane_cnt | 2 | i2c_voltage_sel
+	 * 0x72 - 4 lanes: 0b 0111 0011 : continuous_clock | !lane_cnt | 2 | i2c_voltage_sel
+	 */
+	dev_warn(self->dev, "UB953_GENERAL_CFG (0x02) %#.2x",
+		((cfg->continuous_clock & 0x1) << 6) |
+			((lane_cnt & 0x3) << 4) |
+			0x02 |
+			(cfg->i2c_voltage_sel & 0x01));
+
 	TRY(err, regmap_update_bits(self->map,
 		UB953_GENERAL_CFG,
 		(0x1 << 6) |
@@ -467,16 +498,30 @@ static int ub953_init(struct ub953 *self, const struct ub953_cfg *cfg)
 			(cfg->i2c_voltage_sel & 0x01)));
 
 	if (cfg->hs_clk_div >= 0 && cfg->div_m_val >= 0 && cfg->div_n_val >= 0) {
+
+		dev_warn(self->dev, "UB953_REG_CLKOUT_CTRL0 (0x06) %#.2x",
+			(cfg->hs_clk_div & 0x07) << 5 |
+			(cfg->div_m_val & 0x1F));
+			
 		TRY(err, regmap_write(self->map,
 			UB953_REG_CLKOUT_CTRL0,
 			(cfg->hs_clk_div & 0x07) << 5 |
 				(cfg->div_m_val & 0x1F)));
+
+		dev_warn(self->dev, "UB953_REG_CLKOUT_CTRL1 (0x07) %#.2x",
+			(cfg->div_n_val & 0xFF));
+
 		TRY(err, regmap_write(self->map,
 			UB953_REG_CLKOUT_CTRL1,
 			(cfg->div_n_val & 0xFF)));
 	}
 
 	if (cfg->gpio_rmten >= 0 && cfg->gpio_out_src >= 0) {
+
+		dev_warn(self->dev, "UB953_REG_LOCAL_GPIO_DATA (0x0d) %#.2x",
+			((cfg->gpio_rmten & 0x0F) << 4) |
+				(cfg->gpio_out_src & 0x0F));
+
 		TRY(err, regmap_write(self->map,
 			UB953_REG_LOCAL_GPIO_DATA,
 			((cfg->gpio_rmten & 0x0F) << 4) |
@@ -484,6 +529,11 @@ static int ub953_init(struct ub953 *self, const struct ub953_cfg *cfg)
 	}
 
 	if (cfg->gpio_out_en >= 0 && cfg->gpio_in_en >= 0) {
+
+		dev_warn(self->dev, "UB953_REG_GPIO_INPUT_CTRL (0x0e) %#.2x",
+			((cfg->gpio_out_en & 0x0F) << 4) |
+				(cfg->gpio_in_en & 0x0F));
+
 		TRY(err, regmap_write(self->map,
 			UB953_REG_GPIO_INPUT_CTRL,
 			((cfg->gpio_out_en & 0x0F) << 4) |
@@ -492,6 +542,38 @@ static int ub953_init(struct ub953 *self, const struct ub953_cfg *cfg)
 
 	// No documentation on what this is or why it is needed?
 	TRY(err, ub953_indirect_write(self, 1, 0x08, 0x07));
+
+	dev_warn(self->dev, "UB953_REG_PLLCLK_CTRL (0x05) %#.2x", 0x13);
+	TRY(err, regmap_write(self->map, UB953_REG_PLLCLK_CTRL, 0x13));
+
+	usleep_range(50*1000,50*1000);
+	usleep_range(50*1000,50*1000);
+	usleep_range(50*1000,50*1000);
+
+	{
+		unsigned int reg = 0;
+
+		TRY(err, regmap_read(self->map, UB953_REG_MODE_SEL, &reg));
+		dev_warn(self->dev, "UB953_REG_MODE_SEL (0x%x): %#.2x\n", UB953_REG_MODE_SEL, reg);
+
+		TRY(err, regmap_read(self->map, UB953_REGBC_MODE_SELECT, &reg));
+		dev_warn(self->dev, "UB953_REGBC_MODE_SELECT (0x%x): %#.2x\n", UB953_REGBC_MODE_SELECT, reg);
+
+		TRY(err, regmap_read(self->map, UB953_REG_I2C_CONTROL2, &reg));
+		dev_warn(self->dev, "UB953_REG_I2C_CONTROL2 (0x%x): %#.2x\n", UB953_REG_I2C_CONTROL2, reg);
+
+		TRY(err, regmap_read(self->map, UB953_REG_DVP_CFG, &reg));
+		dev_warn(self->dev, "UB953_REG_DVP_CFG (0x%x): %#.2x\n", UB953_REG_DVP_CFG, reg);
+
+		TRY(err, regmap_read(self->map, UB953_REG_DES_ID, &reg));
+		dev_warn(self->dev, "UB953_REG_DES_ID (0x%x): %#.2x\n", UB953_REG_DES_ID, reg);
+
+		TRY(err, regmap_read(self->map, UB953_REG_GENERAL_STATUS, &reg));
+		dev_warn(self->dev, "UB953_REG_GENERAL_STATUS (0x%x): %#.2x\n", UB953_REG_GENERAL_STATUS, reg);
+
+		TRY(err, regmap_read(self->map, UB953_REG_SENSOR_STATUS, &reg));
+		dev_warn(self->dev, "UB953_REG_SENSOR_STATUS (0x%x): %#.2x\n", UB953_REG_SENSOR_STATUS, reg);
+	}
 
 	return 0;
 }
@@ -545,7 +627,7 @@ static int ub953_probe(struct i2c_client *client,
 	struct device_node *node = client->dev.of_node;
 	struct ub953_devinfo sensor_info;
 	
-	dev_dbg(dev, "probe");
+	dev_warn(dev, "ub953_probe().\n");
 
 	if(!IS_ENABLED(CONFIG_OF) || !node)
 	{
@@ -555,6 +637,7 @@ static int ub953_probe(struct i2c_client *client,
 
 	/* allocate memory for 'self' data */
 	TRY(err, ub953_kzalloc(dev, sizeof(*self), &self));
+	dev_warn(dev, "i2c_set_clientdata().\n");
 	i2c_set_clientdata(client, self);
 	self->client = client;
 	self->dev = &client->dev;
@@ -563,13 +646,20 @@ static int ub953_probe(struct i2c_client *client,
 	mutex_init(&self->indirect_access_lock);
 
 	memset(&sensor_info, 0, sizeof(sensor_info));
+	dev_warn(dev, "ub953_sensor_load().\n");
 	TRY(err, ub953_sensor_load(self, &sensor_info));
 
+	dev_warn(dev, "ub953_regmap_init().\n");
 	TRY(err, ub953_regmap_init(client, &ub953_regmap_cfg, &self->map));
 	memset(&self->cfg, 0, sizeof(self->cfg));
+
+	dev_warn(dev, "ub953_cfg_load().\n");
 	TRY(err, ub953_cfg_load(self, &self->cfg));
+
+	dev_warn(dev, "ub953_init().\n");
 	TRY(err, ub953_init(self, &self->cfg));
 
+	dev_warn(dev, "ub953_sensor_create().\n");
 	TRY(err, ub953_sensor_create(self, &sensor_info));
 
 	dev_info(dev, "probe success");

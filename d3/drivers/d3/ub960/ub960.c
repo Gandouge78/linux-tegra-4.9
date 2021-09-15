@@ -72,10 +72,16 @@ enum {
 	UB960_REG_IO_CTL	= 0x0d,
 	UB960_REG_INTERRUPT_CTL	= 0x23,
 	UB960_REG_INTERRUPT_STS	= 0x24,
+	UB960_REG_CSI_STS	= 0x35,
+	UB960_REG_CSI0_THS_EXIT	= 0x47, /* default 0x00 */
 	UB960_REG_FPD3_PORT_SEL = 0x4c,
 	UB960_REG_RX_PORT_STS1	= 0x4d,
 	UB960_REG_RX_PORT_STS2	= 0x4e,
+	UB960_REG_RX_PAR_ERR_HI	= 0x55, /* default 0x00 */
+	UB960_REG_RX_PAR_ERR_LO	= 0x56, /* default 0x00 */
 	UB960_REG_BCC_CONFIG	= 0x58,
+	UB960_REG_SER_ID	= 0x5b, /* default 0x00 */
+	UB960_REG_SER_ALIAS_ID	= 0x5c, /* default 0x00 */
 	UB960_REG_CSI_VC_MAP	= 0x72,
 	UB960_REG_CSI_RX_STS	= 0x7a,
 	UB960_REG_CSI_PORT_SEL	= 0x32,
@@ -102,6 +108,7 @@ enum {
 	UB960_REG_SLAVE_ALIAS0	= 0x65,
 	UB960_REG_PORT_CONFIG	= 0x6d,
 	UB960_REG_BC_GPIO_CTL0  = 0x6e,
+	UB960_REG_BC_GPIO_CTL1  = 0x6f,
 	UB960_REG_PORT_CONFIG2	= 0x7c,
 	UB960_REG_AEQ_MIN_MAX	= 0xd5,
 	UB960_REG_PORT_ICR_HI	= 0xd8,
@@ -353,9 +360,9 @@ static const struct reg_sequence UB960_400_TIMING[] = {
  * the csi2 reserved register set.
  */
 static const struct reg_sequence UB960_CSI2_RESERVED[] = {
-	{.reg = 0xB0, .def = 0x1C, .delay_us = 100000},
-	{.reg = 0xB1, .def = 0x13, .delay_us = 16000},
-	{.reg = 0xB2, .def = 0x1f, .delay_us = 16000},
+	{.reg = 0xB0, .def = 0x1C, .delay_us = 100000}, /* Indirect Access Register - CSI-2 TX Reserved Registers */
+	{.reg = 0xB1, .def = 0x13, .delay_us = 16000},  /* Indirect Access Register Offset */
+	{.reg = 0xB2, .def = 0x1f, .delay_us = 16000},  /* Indirect Access Data */
 };
 
 
@@ -407,6 +414,8 @@ struct ub960_port {
 	bool locked;
 	struct ub960 *self;
 	struct completion lock_complete;
+	u32 fpd3_mode;
+	u32 bc_freq;
 
 	/** serializer information from device tree for instantiating driver */
 	struct ub960_devinfo ser_info;
@@ -500,7 +509,7 @@ int ub960_s_stream(struct i2c_client *self_in,
 		mutex_lock(lock);
 		++(self->active_streams);
 		mutex_unlock(lock);
-		dev_dbg(self->dev, "%s started a new stream; "
+		dev_warn(self->dev, "%s started a new stream; "
 				"%d active streams", src->dev.driver->name,
 				self->active_streams);
 		return 0;
@@ -510,12 +519,12 @@ int ub960_s_stream(struct i2c_client *self_in,
 		mutex_lock(lock);
 		--(self->active_streams);
 		mutex_unlock(lock);
-		dev_dbg(self->dev, "%s stopped a stream; "
+		dev_warn(self->dev, "%s stopped a stream; "
 				"%d active streams", src->dev.driver->name,
 				self->active_streams);
 		/* only reset if there are no active streams running */
 		if (self->active_streams == 0) {
-			dev_dbg(self->dev, "%s notified end-of-stream,"
+			dev_warn(self->dev, "%s notified end-of-stream,"
 				" performing digital reset", src->dev.driver->name);
 			TRY(err, regmap_write(self->map, UB960_REG_RESET_CTL, 0x01));
 			usleep_range(3 * 1000, 4 * 1000);
@@ -751,16 +760,16 @@ static int ub960_reset(struct ub960 *self)
 
 	if (self->pdb_gpio) {
 		// active low, set low to power down
-		dev_dbg(self->dev, "using pdb_gpio for reset");
+		dev_warn(self->dev, "using pdb_gpio for reset");
 		ub960_gpio_set(self->pdb_gpio, false);
 		usleep_range(3 * 1000, 4 * 1000);
 		ub960_gpio_set(self->pdb_gpio, true);
 		usleep_range(3 * 1000, 4 * 1000);
 	} else {
 		/* No reset gpio, try digital reset */
-		dev_dbg(self->dev, "no pdb_gpio, trying digital reset");
+		dev_warn(self->dev, "no pdb_gpio, trying digital reset");
 		TRY(err, regmap_write(self->map, UB960_REG_RESET_CTL, 0x02));
-		dev_dbg(self->dev, "err = %i after regmap_write(UB960_REG_RESET_CTL)", err);
+		dev_warn(self->dev, "err = %i after regmap_write(UB960_REG_RESET_CTL)", err);
 		usleep_range(3 * 1000, 4 * 1000);
 	}
 
@@ -768,7 +777,7 @@ static int ub960_reset(struct ub960 *self)
 	for (tries = 5; --tries > 0; ) {
 		err = regmap_bulk_read(self->map, UB960_REG_FPD3_RX_ID0, fpd3_rx_id,
 					  ARRAY_SIZE(fpd3_rx_id));
-		dev_dbg(self->dev, "err = %i after regmap_bulk_read(UB960_REG_FPD3_RX_ID0)", err);
+		dev_warn(self->dev, "err = %i after regmap_bulk_read(UB960_REG_FPD3_RX_ID0)", err);
 
 		if (err == 0)
 			break;
@@ -789,7 +798,11 @@ static int ub960_reset(struct ub960 *self)
 	if(!is_known) {
 		dev_warn(self->dev, "Unexpected FPD3_RX_ID: %.*s\n",
 			 (int)ARRAY_SIZE(fpd3_rx_id), fpd3_rx_id);
+	} else {
+		dev_warn(self->dev, "FPD3_RX_ID: %.*s\n",
+			 (int)ARRAY_SIZE(fpd3_rx_id), fpd3_rx_id);
 	}
+
 	return 0;
 }
 
@@ -812,9 +825,9 @@ static int ub960_is_device_supported(struct ub960 *self, bool *out_is_supported)
 	dev_info(self->dev, "revision mask id: %#.2x", id);
 
 	switch (id) {
-	/* PDS90UB960-Q1 A0 */
+	/* PDS90UB960-Q1 A0 or DS90UB954-Q1 */
 	case 0x2:
-		dev_info(self->dev, "detected: PDS90UB960-Q1 A0");
+		dev_info(self->dev, "detected: PDS90UB960-Q1 A0 or DS90UB954-Q1");
 		break;
 	/* PDS90UB960-Q1 A1 */
 	case 0x3:
@@ -848,6 +861,8 @@ static int ub960_fdp3_port_select(struct ub960 *self, u8 read_port,
 	int err = 0;
 	/* bits 5 and 4 RX_READ_PORT 0-3 (direct port mapping)*/
 	/* bit 0, port1, bit1, port 2, */
+	dev_warn(self->dev, "UB960_REG_FPD3_PORT_SEL (0x4c) %#.2x",
+		(read_port << 4) | write_ports_mask);
 	TRY(err, regmap_write(self->map, UB960_REG_FPD3_PORT_SEL,
 			      (read_port << 4) | write_ports_mask));
 	return 0;
@@ -865,6 +880,9 @@ static int ub960_fdp3_port_select(struct ub960 *self, u8 read_port,
 static int ub960_slave_id_set(struct ub960 *self, u8 id, u8 addr)
 {
 	int err = 0;
+	dev_warn(self->dev, "UB960_REG_SLAVE_ID0 (0x5D + id (%d)) %#.2x",
+		id, addr << 1);
+
 	TRY(err, regmap_write(self->map, UB960_REG_SLAVE_ID0 + id, addr << 1));
 	return 0;
 }
@@ -882,6 +900,8 @@ static int ub960_slave_id_set(struct ub960 *self, u8 id, u8 addr)
 static int ub960_slave_alias_set(struct ub960 *self, u8 id, u8 addr)
 {
 	int err = 0;
+	dev_warn(self->dev, "UB960_REG_SLAVE_ALIAS0 (0x65 + id (%d)) %#.2x",
+		id, addr << 1);
 	TRY(err, regmap_write(self->map, UB960_REG_SLAVE_ALIAS0 + id, addr << 1));
 	return 0;
 }
@@ -948,7 +968,8 @@ static u8 ub960_csi_info_to_reg(struct ub960 *self)
  * @return 0 on success
  */
 static int ub960_chan_start(struct ub960 *self, u8 chan_id, u8 slave_id1,
-			    u8 slave_alias1, u8 slave_id2, u8 slave_alias2)
+			    u8 slave_alias1, u8 slave_id2, u8 slave_alias2,
+			    u32 fpd3_mode)
 {
 	u8 val = 0;
 	int err = 0;
@@ -963,21 +984,35 @@ static int ub960_chan_start(struct ub960 *self, u8 chan_id, u8 slave_id1,
 
 
 	val = ub960_csi_info_to_reg(self);
-	dev_dbg(self->dev, "csi_ctl1: %#x", val);
+	dev_warn(self->dev, "csi_ctl1: %#x", val);
+
+	dev_warn(self->dev, "slave_id1: %#x ; slave_alias1: %#x; slave_id2: %#x ; slave_alias2: %#x; ",
+		 slave_id1, slave_alias1, slave_id2, slave_alias2);
+
 	TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_CSI_CTL1, val));
 
-	/* {0xBC, 0x80}, /\* Frame valid minimum time*\/ */
+	/* {0xBC, 0x80}, /\* Frame valid minimum time (default value) *\/ */
 	TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_FV_MIN_TIME, 0x80));
 	/* {0x5D, 0x30}, /\*Serializer I2C Address*\/ */
 	TRY_MUTEX(lock, err, ub960_slave_id_set(self, 0, slave_id1));
 	/* {0x65, (IMX390_UB960_PORT_0_SER_ADDR << 1U)}, */
 	TRY_MUTEX(lock, err, ub960_slave_alias_set(self, 0, slave_alias1));
+
+	//TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_SER_ALIAS_ID, slave_alias1 << 1));
+
 	/* {0x5E, 0x42}, /\*Sensor I2C Address*\/ */
 	TRY_MUTEX(lock, err, ub960_slave_id_set(self, 1, slave_id2));
 	/* {0x66, (IMX390_UB960_PORT_0_SENSOR_ADDR << 1U)}, */
 	TRY_MUTEX(lock, err, ub960_slave_alias_set(self, 1, slave_alias2));
 	/* {0x6D, 0x7C}, /\*CSI Mode*\/ */
-	TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_PORT_CONFIG, 0x7c));
+	TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_PORT_CONFIG, 0x7c | (0x03 & fpd3_mode)));
+
+	{
+		u32 reg = 0;
+		TRY(err, regmap_read(self->map, UB960_REG_PORT_CONFIG, &reg));
+		dev_warn(self->dev, "UB960_REG_PORT_CONFIG (0x6d): %#.2x\n", reg);
+	}
+
 	/* {0x72, 0x00}, /\*VC Map - All to 0 *\/ */
 
 	/* 0 - 0
@@ -987,11 +1022,12 @@ static int ub960_chan_start(struct ub960 *self, u8 chan_id, u8 slave_id1,
 	 */
 	val = (chan_id << 6) | (chan_id << 4) | (chan_id << 2) | chan_id;
 	TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_CSI_VC_MAP, val));
+	dev_warn(self->dev, "UB960_REG_CSI_VC_MAP (0x72): %#x", val);
 	/* /\* GJR: based on the datasheet this should be 0x02 for the */
 	/*  * register to match the comment. *\/ */
-	/* {0x7C, 0x00}, /\*Line Valid active high, Frame Valid active high*\/ */
+	/* {0x7C, 0x00}, /\*Line Valid active high, Frame Valid active high (default value)*\/ */
 	TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_PORT_CONFIG2, 0x0));
-	/* {0xD5, 0xF2}, /\*Auto Attenuation*\/ */
+	/* {0xD5, 0xF2}, /\*Auto Attenuation (default value) *\/ */
 	TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_AEQ_MIN_MAX, 0xf2));
 
 
@@ -1020,8 +1056,10 @@ static int ub960_chan_cfg(struct ub960 *self, u8 id)
 		{UB960_REG_AEQ_CTL,         0x71},
 		{UB960_REG_SFILTER_CFG,     0xA9},
 		{UB960_REG_LINK_ERROR_CNT,  0x33},
-		// Route FrameSync to BC_GPIO0
+		// D3: Route FrameSync to BC_GPIO0
 		{UB960_REG_BC_GPIO_CTL0,    0x8a},
+		// FS: Route FrameSync to BC_GPIO2
+		{UB960_REG_BC_GPIO_CTL1,    0x9a},
 	};
 
 	TRY(err, regmap_multi_reg_write(self->map, seq, ARRAY_SIZE(seq)));
@@ -1047,7 +1085,12 @@ static int ub960_csi_configure(struct ub960 *self)
 	/* 			       ARRAY_SIZE(UB960_DEFAULTS))); */
 
 	/* lower two bits are csi tx speed */
+	dev_warn(self->dev, "UB960_REG_CSI_PLL_CTL (0x1f) %#.2x",
+		(1 << 2) | (self->csi.speed & 0x3));
 	TRY(err, regmap_write(self->map, UB960_REG_CSI_PLL_CTL, (1 << 2) | (self->csi.speed & 0x3)));
+	dev_warn(self->dev, "UB960_REG_CSI_PLL_CTL (0x1f) %#.2x",
+		(1 << 2) | (self->csi.speed & 0x3));
+
 	TRY(err, regmap_multi_reg_write(self->map, UB960_CSI2_RESERVED,
 					ARRAY_SIZE(UB960_CSI2_RESERVED)));
 	if (self->csi.speed == UB960_CSI_TX_SPEED_400) {
@@ -1068,7 +1111,10 @@ static int ub960_csi_configure(struct ub960 *self)
 
 	/* RX_PORT_CTL disable ports */
 	/* {0x0C, 0x0F}, /\*Disable all ports*\/ */
+	/* FS: {0x0C, 0x0F, 0x10},     Enable all Rx ports */
 	TRY(err, regmap_write(self->map, UB960_REG_RX_PORT_CTL, 0x00));
+	dev_warn(self->dev, "UB960_REG_RX_PORT_CTL (0x0c) %#.2x",
+		0x00);
 
 	/* {0x32, 0x01}, /\*Enable TX port 0*\/ */
 	TRY(err, regmap_write(self->map, UB960_REG_CSI_PORT_SEL, 0x1));
@@ -1196,6 +1242,7 @@ static int ub960_fsync_configure(struct ub960 *self, struct device_node *node)
 	if (mode == 0) {
 		reg_val |= 1;  // FS_GEN_ENABLE
 	}
+	dev_warn(self->dev, "UB960_REG_FS_CTL (0x18): %#.2x\n", reg_val);
 	TRY(err, regmap_write(self->map, UB960_REG_FS_CTL, reg_val));
 
 	return 0;
@@ -1225,7 +1272,7 @@ static int ub960_devinfo_load(struct ub960 *self,
 	strncpy(out->type, type, sizeof(out->type));
 
 	out->of_node = node;
-	dev_dbg(self->dev, "reg=%#.2x, physical-addr=%#.2x, type=(%s)",
+	dev_warn(self->dev, "reg=%#.2x, physical-addr=%#.2x, type=(%s)",
 		out->addr, out->physical_addr, out->type);
 	return 0;
 }
@@ -1298,7 +1345,7 @@ static int ub960_port_load(struct ub960 *self, struct device_node *node,
 	int err = 0;
 	int count = 0;
 
-	dev_dbg(self->dev, "Configure port %d", port->index);
+	dev_warn(self->dev, "Configure port %d", port->index);
 
 	port->self = self;
 	port->locked = false;
@@ -1334,12 +1381,36 @@ static int ub960_port_load(struct ub960 *self, struct device_node *node,
  *
  * @return 0 on success
  */
-static int ub960_ports_load(struct ub960 *self)
+static int ub960_ports_load(struct ub960 *self, struct device_node *node)
 {
 	/* int err = 0; */
 	struct device_node *child = NULL;
 	u32 reg = 0;
 	int err = 0;
+	u32 mode = 0;
+	u32 bc_freq = 0;
+
+	err = of_property_read_u32(node, "fpd3-mode", &mode);
+	if (err)
+	{
+		mode = 0;
+		dev_warn(self->dev, "using default fpd3-mode: %d", mode);
+	}
+	if ((mode < 0) || (mode > 3)) {
+		dev_err(self->dev, "invalid fpd3-mode:%u (0-3 valid)", mode);
+		return -EINVAL;
+	}
+
+	err = of_property_read_u32(node, "bc-freq", &bc_freq);
+	if (err)
+	{
+		bc_freq = 6;
+		dev_warn(self->dev, "using default bc-freq: %d", bc_freq);
+	}
+	if ((bc_freq < 0) || (bc_freq > 7)) {
+		dev_err(self->dev, "invalid bc-freq:%u (0-7 valid)", bc_freq);
+		return -EINVAL;
+	}
 
 	for_each_available_child_of_node(self->dev->of_node, child) {
 		err = of_property_read_u32(child, "reg", &reg);
@@ -1352,6 +1423,8 @@ static int ub960_ports_load(struct ub960 *self)
 			continue;
 		}
 		self->ports[reg].index = reg;
+		self->ports[reg].fpd3_mode = mode;
+		self->ports[reg].bc_freq = bc_freq;
 
 		TRY(err, ub960_port_load(self, child, &self->ports[reg]));
 	}
@@ -1428,7 +1501,9 @@ static int ub960_ports_configure(struct ub960 *self)
 
 		mutex_lock(lock);
 		TRY_MUTEX(lock, err, ub960_fdp3_port_select(self, i, 1 << i));
-		TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_BCC_CONFIG, 0x5e));
+		/* UB960_REG_BCC_CONFIG {0x58, 0x5D, 0x10},  Enable Back channel, set to 50Mbps */
+		/* BC_FREQ_SELECT: 010: 10 Mbps ; 101: 25 Mbps ; 110: 50 Mbps */
+		TRY_MUTEX(lock, err, regmap_write(self->map, UB960_REG_BCC_CONFIG, 0x58 | (0x7 & p->bc_freq)));
 		mutex_unlock(lock);
 
 		TRY(err, ub960_chan_cfg(self, i));
@@ -1437,10 +1512,39 @@ static int ub960_ports_configure(struct ub960 *self)
 					  p->ser_info.physical_addr,
 					  p->ser_info.addr,
 					  p->sensor_info.physical_addr,
-					  p->sensor_info.addr));
+					  p->sensor_info.addr,
+					  p->fpd3_mode));
 
 		/* Enable port */
 		TRY(err, ub960_set_port_enabled(self, p, true));
+	}
+
+	{
+		unsigned int reg = 0;
+
+		TRY(err, regmap_read(self->map, UB960_REG_SER_ID, &reg));
+		dev_warn(self->dev, "UB960_REG_SER_ID (0x5b): %#.2x\n", reg);
+
+		TRY(err, regmap_read(self->map, UB960_REG_SER_ALIAS_ID, &reg));
+		dev_warn(self->dev, "UB960_REG_SER_ALIAS_ID (0x5c): %#.2x\n", reg);
+
+		/****************************************************************/
+		TRY(err, regmap_read(self->map, UB960_REG_SLAVE_ID0, &reg));
+		dev_warn(self->dev, "UB960_REG_SLAVE_ID0 (0x5d): %#.2x\n", reg);
+
+		TRY(err, regmap_read(self->map, UB960_REG_SLAVE_ALIAS0, &reg));
+		dev_warn(self->dev, "UB960_REG_SLAVE_ALIAS0 (0x65): %#.2x\n", reg);
+
+		/****************************************************************/
+		TRY(err, regmap_read(self->map, UB960_REG_SLAVE_ID0 + 1, &reg));
+		dev_warn(self->dev, "UB960_REG_SLAVE_ID1 (0x5c): %#.2x\n", reg);
+
+		TRY(err, regmap_read(self->map, UB960_REG_SLAVE_ALIAS0 + 1, &reg));
+		dev_warn(self->dev, "UB960_REG_SLAVE_ALIAS1 (0x66): %#.2x\n", reg);
+
+		TRY(err, regmap_read(self->map, UB960_REG_CSI_STS , &reg));
+		dev_warn(self->dev, "UB960_REG_CSI_STS (0x35): %#.2x\n", reg);
+		
 	}
 	return 0;
 }
@@ -1726,7 +1830,7 @@ static int ub960_configuration_load(struct ub960 *self,
 	/* tp_node = of_find_node_by_name(node, "test-pattern"); */
 	/* if (tp_node != NULL) { */
 	/* 	if (of_device_is_available(tp_node)) { */
-	/* 		dev_dbg(self->dev, "loading test-pattern parameters"); */
+	/* 		dev_warn(self->dev, "loading test-pattern parameters"); */
 	/* 		err = ub960_test_pattern_load(self, tp_node); */
 	/* 		if (err) { */
 	/* 			of_node_put(tp_node); */
@@ -1737,14 +1841,14 @@ static int ub960_configuration_load(struct ub960 *self,
 	/* } */
 
 	/* load parameters for csi ports */
-	dev_dbg(self->dev, "loading csi parameters");
+	dev_warn(self->dev, "loading csi parameters");
 	TRY(err, ub960_load_csi(self, node));
 
 	/* Read port data from device tree. Do this first, avoid
 	 * touching the hardware in case there's a device tree
 	 * misconfiguration. */
-	dev_dbg(self->dev, "loading fpdlink port parameters");
-	TRY(err, ub960_ports_load(self));
+	dev_warn(self->dev, "loading fpdlink port parameters");
+	TRY(err, ub960_ports_load(self, node));
 
 	return 0;
 }
@@ -1877,24 +1981,24 @@ static inline int ub960_get_port_status(struct ub960_port *port,
 
 #ifdef VERBOSE_STATUS
 	strncat_bitfields(buf, sizeof(buf), RX_PORT_STS1_FIELDS, rx_port_sts1);
-	dev_dbg_ratelimited(self->dev, "[%d] RX_PORT_STS1: %02x %s\n", port->index,
+	dev_warn_ratelimited(self->dev, "[%d] RX_PORT_STS1: %02x %s\n", port->index,
 			    *rx_port_sts1 & 0xff, buf);
 
 	strncat_bitfields(buf, sizeof(buf), RX_PORT_STS2_FIELDS, rx_port_sts2);
-	dev_dbg_ratelimited(self->dev, "[%d] RX_PORT_STS2: %02x %s\n", port->index,
+	dev_warn_ratelimited(self->dev, "[%d] RX_PORT_STS2: %02x %s\n", port->index,
 			    *rx_port_sts2 & 0xff, buf);
 
 	strncat_bitfields(buf, sizeof(buf), CSI_RX_STS_FIELDS, csi_rx_sts);
-	dev_dbg_ratelimited(self->dev, "[%d] CSI_RX_STS: %02x %s\n", port->index,
+	dev_warn_ratelimited(self->dev, "[%d] CSI_RX_STS: %02x %s\n", port->index,
 			    *csi_rx_sts & 0xff, buf);
 #else // VERBOSE_STATUS
-	dev_dbg_ratelimited(self->dev, "[%d] RX_PORT_STS1: %02x\n", port->index,
+	dev_warn_ratelimited(self->dev, "[%d] RX_PORT_STS1: %02x\n", port->index,
 			    *rx_port_sts1 & 0xff);
 
-	dev_dbg_ratelimited(self->dev, "[%d] RX_PORT_STS2: %02x\n", port->index,
+	dev_warn_ratelimited(self->dev, "[%d] RX_PORT_STS2: %02x\n", port->index,
 			    *rx_port_sts2 & 0xff);
 
-	dev_dbg_ratelimited(self->dev, "[%d] CSI_RX_STS: %02x\n", port->index,
+	dev_warn_ratelimited(self->dev, "[%d] CSI_RX_STS: %02x\n", port->index,
 			    *csi_rx_sts & 0xff);
 #endif // VERBOSE_STATUS
 
@@ -1914,7 +2018,7 @@ static void ub960_port_check_lock_sts(struct work_struct *work)
 	unsigned int csi_rx_sts;
 	bool locked;
 
-	dev_dbg(self->dev, "%s enter", __func__);
+	dev_warn(self->dev, "%s enter", __func__);
 
 	err = ub960_get_port_status(port, &rx_port_sts1, &rx_port_sts2, &csi_rx_sts);
 	if (err < 0)
@@ -1922,7 +2026,7 @@ static void ub960_port_check_lock_sts(struct work_struct *work)
 
 	locked = ((rx_port_sts1 >> UB960_LOCK_STS_OFFSET) & UB960_LOCK_STS_MASK) == 1;
 
-	dev_dbg_ratelimited(self->dev, "CHECK LOCK: locked=%d, port->locked=%d\n",
+	dev_warn_ratelimited(self->dev, "CHECK LOCK: locked=%d, port->locked=%d\n",
 			    locked, port->locked);
 
 	if (locked != port->locked) {
@@ -1950,13 +2054,13 @@ static int ub960_handle_port_irq(struct ub960 *self, struct ub960_port *port)
 	unsigned int rx_port_sts2;
 	unsigned int csi_rx_sts;
 
-	dev_dbg_ratelimited(self->dev, "HANDLE PORT %d", port->index);
+	dev_warn_ratelimited(self->dev, "HANDLE PORT %d", port->index);
 
 	TRY(err, ub960_get_port_status(port, &rx_port_sts1, &rx_port_sts2, &csi_rx_sts));
 
 	if (rx_port_sts1 & UB960_LOCK_STS_CHG_MASK) {
 		cancel_delayed_work_sync(&port->lock_work);
-		dev_dbg(self->dev, "port->lock_work scheduled");
+		dev_warn(self->dev, "port->lock_work scheduled");
 		schedule_delayed_work(&port->lock_work, self->lock_settle_time);
 	}
 
@@ -1975,11 +2079,11 @@ static int ub960_check_status(struct ub960 *self)
 	if (!status)
 		return -EIO;
 
-	dev_dbg_ratelimited(self->dev, "STATUS: %02x\n", status & 0xff);
+	dev_warn_ratelimited(self->dev, "STATUS: %02x\n", status & 0xff);
 
 	for (id = 0; id < ARRAY_SIZE(self->ports); id++) {
 		port = &self->ports[id];
-		dev_dbg(self->dev, "port %i: configured = %i, enabled = %i",
+		dev_warn(self->dev, "port %i: configured = %i, enabled = %i",
 				port->index, port->configured, port->enabled);
 
 		if (!port->configured)
@@ -2016,7 +2120,7 @@ static void ub960_remove_port(struct ub960 *self, struct ub960_port *port)
 	if (!port->configured)
 		return;
 
-	dev_dbg(self->dev, "port->lock_work canceled");
+	dev_warn(self->dev, "port->lock_work canceled");
 	cancel_delayed_work_sync(&port->lock_work);
 
 	if (port->ser)
@@ -2079,7 +2183,7 @@ static int ub960_probe(struct i2c_client *client,
 	int err = 0;
 	bool is_supported = false;
 
-	dev_dbg(dev, "probe enter");
+	dev_warn(dev, "probe enter");
 
 	if (!IS_ENABLED(CONFIG_OF) || !node) {
 		dev_err(dev, "of not enabled");
@@ -2100,28 +2204,28 @@ static int ub960_probe(struct i2c_client *client,
 
 	/* Load configuration from device tree */
 	TRY(err, ub960_configuration_load(self, node));
-	dev_dbg(dev, "ub960_configuration_load ok");
+	dev_warn(dev, "ub960_configuration_load ok");
 
 	/* Setup regulators */
 	TRY(err, ub960_regulators_get(self));
-	dev_dbg(dev, "ub960_regulators_get ok");
+	dev_warn(dev, "ub960_regulators_get ok");
 
 	/* Setup gpio */
 	TRY(err, ub960_gpios_get(self));
-	dev_dbg(dev, "ub960_gpios_get ok");
+	dev_warn(dev, "ub960_gpios_get ok");
 
 	mutex_init(&self->indirect_access_lock);
 
 	TRY_MEM(self->map, devm_regmap_init_i2c(client, &ub960_regmap_cfg));
 
 	err = ub960_reset(self);
-	dev_dbg(dev, "ub960_reset ok");
+	dev_warn(dev, "ub960_reset ok");
 	if (err == -EREMOTEIO || err == -ETIMEDOUT)
 		return -EPROBE_DEFER;
 
 	/* Sanity check */
 	err = ub960_is_device_supported(self, &is_supported);
-	dev_dbg(dev, "ub960_is_device_supported ok");
+	dev_warn(dev, "ub960_is_device_supported ok");
 	if (err == -EREMOTEIO || err == -ETIMEDOUT)
 		return -EPROBE_DEFER;
 	if (!is_supported) {
@@ -2130,24 +2234,24 @@ static int ub960_probe(struct i2c_client *client,
 	}
 
 	err |= ub960_csi_configure(self);
-	dev_dbg(dev, "ub960_csi_configure ok");
+	dev_warn(dev, "ub960_csi_configure ok");
 	err |= ub960_fsync_configure(self, node);
-	dev_dbg(dev, "ub960_fsync_configure ok");
+	dev_warn(dev, "ub960_fsync_configure ok");
 
 	/* configure the ports that have been defined in the device tree */
 	err |= ub960_ports_configure(self);
-	dev_dbg(dev, "ub960_ports_configure ok");
+	dev_warn(dev, "ub960_ports_configure ok");
 
 
 	TRY(err, ub960_setup_irq(self));
-	dev_dbg(dev, "ub960_setup_irq ok");
+	dev_warn(dev, "ub960_setup_irq ok");
 	/* TODO: After this point the polled-irq must be recovered upon failure */
 
 	if (self->test_pattern.enabled) {
 		err |= ub960_test_pattern_enable(self);
-		dev_dbg(dev, "ub960_test_pattern_enable ok");
+		dev_warn(dev, "ub960_test_pattern_enable ok");
 		err |= ub960_test_pattern_driver_start(self);
-		dev_dbg(dev, "ub960_test_pattern_driver_start ok");
+		dev_warn(dev, "ub960_test_pattern_driver_start ok");
 	}
 
 	return 0;

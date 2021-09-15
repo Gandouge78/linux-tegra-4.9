@@ -17,14 +17,14 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-#include "imx390-mode-1936x1100-HDR.h"
+#include "imx390-mode-1936x1200-HDR.h"
 
 /**
  * This configuration was supplied by Sony for HDR. The only real
  * modification we (D3) made was to disable the rear embedded data
  * line.
  */
-const struct reg_sequence imx390_mode_1936x1100HDR[] = {
+const struct reg_sequence imx390_mode_1936x1200HDR[] = {
 	{0x2E18, 0x00},		/* disable rear embedded data line */
 	{0x000C, 0xF2},		/* shs 754 lines */
 	{0x000D, 0x02},
@@ -1171,10 +1171,10 @@ const struct reg_sequence imx390_mode_1936x1100HDR[] = {
 	{0x3375, 0x00},
 	{0x3376, 0x01},
 	{0x3377, 0x00},
-	{0x3410, 0x90},
-	{0x3411, 0x07},
-	{0x3418, 0x48},
-	{0x3419, 0x04},
+	{0x3410, 0x90}, // largeur (poids faibles) ??
+	{0x3411, 0x07},// largeur (poids forts) ??
+	{0x3418, 0x48},// hauteur (poids faibles) ??
+	{0x3419, 0x04},// hauteur (poids forts) ??
 	/* {0x344B, }, */
 	/* {0x3450, }, */
 	{0x34BE, 0x7A},
@@ -3972,4 +3972,4 @@ const struct reg_sequence imx390_mode_1936x1100HDR[] = {
 	{0x723E, 0x45},
 	{0x723F, 0x12},
 };
-const size_t imx390_mode_1936x1100HDR_len = ARRAY_SIZE(imx390_mode_1936x1100HDR);
+const size_t imx390_mode_1936x1200HDR_len = ARRAY_SIZE(imx390_mode_1936x1200HDR);

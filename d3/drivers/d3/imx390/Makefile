@@ -8,6 +8,7 @@ imx390-objs	:= \
 
 ifeq ($(CONFIG_D3_IMX390_HDR_ENABLE),y)
 	imx390-objs += imx390-mode-1936x1100-HDR.o
+	imx390-objs += imx390-mode-1936x1200-HDR.o
 endif
 
 obj-$(CONFIG_D3_IMX390) += imx390.o
